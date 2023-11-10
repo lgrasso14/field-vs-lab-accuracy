@@ -1,0 +1,749 @@
+---
+title: "Field vs Lab Chlorine Accuracy"
+author: "Laura Grasso"
+date: "2023-10-31"
+output: pdf_document
+---
+              
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, error = TRUE)
+
+```
+
+# Statistical analysis for assessing results difference between lab and field analysis for Total Chlorine
+
+field SL1000 
+lab method: SM 4500-Cl D
+
+
+
+
+## data 
+
+data from LIMS for the 2023 year.
+sites are from the routine daily routes. 
+data considered only when both field and lab have been collected 
+
+```{r}
+library(magrittr)
+library(wqr)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(fuzzyjoin)
+
+
+start <-'2022-10-19'
+
+end <- '2023-10-19'
+
+param<- c("Field-Chlorine Residual Total", "Chlorine Residual Total")
+
+sites2 <- c(1101, 1102, 1103, 1107, 1300, 1301, 1302, 1303, 1401, 1601, 1602, 1603, 
+            1608, 1701, 1702, 1708, 1710, 1713, 1716, 1718, 1719, 1721, 2401, 2403,
+            2501, 2502, 2600, 2601, 2602, 2603, 2706, 2712, 2713, 3800, 3801, 3803, 
+            3901, 3904, 3906, 3907, 3913, 4001, 4005, 7101, 7204, 7207, 7301, 7302, 
+            7401, 7502, 7601)
+
+
+
+db <- read_LIMS(site = NULL, 
+                
+                parameter = param, 
+                
+                start_date = start, end_date = end, 
+                
+                sample_class = "Routine Daily") %>%
+  
+  filter(!is.na(result)) %>%
+  
+  separate('date_time', into = c("date", "time"), sep = ' ') %>%
+  
+  group_by(lims_number, site, date) %>%
+  
+  arrange(lims_number) 
+
+  db
+
+```
+
+# data preparation for binning 
+
+created columns: 
+
+- difference between lab and field (pivot wider)
+- percentage difference (lab as reference)
+- binning referring to difference 
+
+
+```{r}
+#define tags 
+
+
+tags <- c("[-1, -0.70)","[-0.70,-0.50)", "[-0.50, -0.20)", "[-0.20, -0.10)",
+          "[-0.10, -0.05)","[-0.05, -0.02)", "[-0.02, 0)", 
+          "[0-0.02)","[0.02-0.05)", "[0.05-0.10)", "[0.10-0.20)", 
+          "[0.20-0.30)", "[0.30-0.50)","[0.50-1.0)")
+
+labels <- tags
+
+
+db1 <- pivot_wider(db, id_cols = c("site", "lims_number", "date", "temperature", "units"),
+                   
+                   values_from = result, 
+                   
+                   names_from = parameter) %>%
+ 
+   filter(!is.na(`Field-Chlorine Residual Total`) & !is.na(`Chlorine Residual Total`)) %>%
+  
+  
+   mutate(
+     
+     "fieldtcl2" = `Field-Chlorine Residual Total`, 
+     
+     "labtcl2" = `Chlorine Residual Total`,
+     
+     "difference" = (labtcl2 - fieldtcl2),
+ 
+     "percentdiff" = ((fieldtcl2 - labtcl2)/labtcl2)*100 ) %>% 
+  
+select( -c(`Field-Chlorine Residual Total`, `Chlorine Residual Total`)) %>%
+  
+mutate(bins= cut(difference, 
+                 
+                 breaks=c(-1, -0.70, -0.50, -0.20, -0.10, -0.05, -0.02, 0,
+                                        0.02, 0.05, 0.10, 0.20, 0.30, 0.50, 1.0), 
+                 
+                 include.lowest = TRUE,
+                 
+                 labels = tags))
+       
+       
+
+
+
+#this does the same thing as the frequency of difference in the line below 
+
+#grouptag <- summary(db1$bins)
+
+
+```
+
+
+# proportion difference neg/pos 
+
+a negative difference means that field chlorine > lab chlorine (this is what we would expect since for the time gap between collection and lab analysis)
+a positive difference means that lab chlorine > field chlorine 
+
+
+
+```{r}
+
+
+pos <- nrow(db1[db1$difference>0,])
+neg <- nrow(db1[db1$difference<0,])
+equal <- nrow(db1[db1$difference ==0,])
+
+tot <- pos + neg + equal 
+counts <- as.data.frame(cbind(pos,neg, equal, tot))
+counts
+#normalizing 
+posn <- pos/tot
+negn <-  neg/tot
+equaln <- equal/tot
+countsn <- as.data.frame(rbind("pos" = posn,"neg" = negn, "equal" = equaln, tot))
+
+df <- rbind("counts" = counts, "norm" = countsn)
+
+df1 <- round(df, 2)
+df1
+
+```
+graph 
+```{r}
+
+
+# A sample data frame
+#df <- data.frame(
+#  category = rep(c("A", "B", "C"), each = 3),
+ # value = c("pos", "neg", "equal"),
+ # norm = c(0.4, 0.3, 0.3, 0.5, 0.2, 0.3, 0.6, 0.1, 0.3))
+#df
+
+
+# Plot the normalized counts as stacked bars
+#ggplot(df, aes(x = category, y = norm, fill = value)) +
+#  geom_bar(stat = "identity", position = "stack")
+
+```
+
+
+#difference range binning between field and lab chlorine.
+
+geom bar comparing counts of chlorine samples vs difference between lab and field. 
+
+```{r}
+total_count <- length(db1$lims_number)  #normalization for the next step
+ 
+db1s <- db1 %>%
+  group_by(bins) %>%
+  mutate(frequency = n()) %>%
+  ungroup() %>%
+  mutate("norm" = (normalized_frequency = frequency / total_count))
+
+plot <- ggplot(db1s, aes(x= bins)) + 
+  
+  geom_bar(aes(y= after_stat(count))) + scale_y_continuous(limits=c(0,5000)) +
+  
+  geom_text(stat = 'count', aes(label = after_stat(count)), vjust = -1) +
+
+
+  xlab("difference lab vs field")  
+
+ plot2 <- plot +  labs(title = "Values Difference Field vs Lab Chlorine") +
+   
+   theme(axis.text.x = element_text(angle = 60, hjust = 1)) 
+ 
+
+
+ plot2
+ 
+ 
+ # freq <- db1 %>% group_by(bins) %>% count((bins))   ## normalization 
+ 
+ density_plot <- ggplot(db1s, aes(x = bins)) +
+  geom_density(fill = "lightblue", alpha = 0.5) +
+  xlab("difference lab vs field") +
+  ylab("Density")
+
+ 
+ density_plot
+# Combine the two plots
+
+ 
+
+```
+## normalized geom bar 
+
+same analysis but normalized 
+
+```{r}
+
+plot <-
+  
+  ggplot(db1s, aes(x= bins, y = norm)) + 
+  
+  geom_bar(stat = 'identity') +
+  
+  scale_y_continuous(aes(label=scales::percent(norm), vjust = -1)) + 
+  
+  xlab("difference lab vs field") + ylab("normalized percent") +
+
+  
+  geom_text(aes(label=scales::percent(norm), vjust = -1, angle = 25)) 
+  
+  
+ plot2 <- plot +  labs(title = "Values Difference Field vs Lab Chlorine") +
+   
+   theme(axis.text.x = element_text(angle = 60, hjust = 1))
+ 
+
+
+ plot2
+ 
+
+
+
+```
+
+## binning by the lab result 
+
+```{r}
+
+
+tags1 <- c("[0, 0.20]","[0.20, 0.50)", "[0.50, 0.70)", "[0.70, 1.0)",
+          "[1.0, 1.20)","[1.20, 1.50)", "[1.50, 1.70)", 
+          "[1.70, 1.90)","[1.90, 2.10)", "[2.10, 2.30)", "[2.30, 2.60)", 
+          "[2.60, 2.90)", "[2.90-3.50)")
+
+labels <- tags1
+
+
+db3 <- pivot_wider(db, id_cols = c("site", "lims_number", "date", "temperature", "units"),
+                   
+                   values_from = result, 
+                   
+                   names_from = parameter) %>%
+ 
+   filter(!is.na(`Field-Chlorine Residual Total`) & !is.na(`Chlorine Residual Total`)) %>%
+  
+  
+   mutate(
+     
+     "fieldtcl2" = `Field-Chlorine Residual Total`, 
+     
+     "labtcl2" = `Chlorine Residual Total`,
+     
+     "difference" = (labtcl2 - fieldtcl2),
+ 
+     "percentdiff" = ((fieldtcl2 - labtcl2)/labtcl2)*100 ) %>% 
+  
+select( -c(`Field-Chlorine Residual Total`, `Chlorine Residual Total`)) %>%
+  
+mutate(bins= cut(labtcl2,  
+                 
+                 breaks=c(0, 0.20, 0.50, 0.70, 1.0, 1.20, 1.50, 1.70, 1.90, 2.10,
+                          2.30, 2.60, 2.90, 3.50),
+                 
+                 include.lowest = TRUE,
+                 
+                 labels = tags1)) 
+
+
+
+# to check the range of labtcl2
+#tt <- unique(db1$labtcl2) %>%
+#  as_tibble() %>%
+#  arrange(desc(value))
+
+#summary(tt)
+
+```
+
+# difference vs temperature
+
+```{r}
+library(ggplot2)
+library(ggplot2)
+
+plotres <- ggplot(db3, aes(x = temperature, y = difference)) +
+  geom_point() +  # Add points for the scatterplot
+  stat_smooth(method = "auto", se = FALSE) +  # Add a smoothing line with standard error bands turned off
+  scale_y_continuous(limits = c(-0.6, 1.0), breaks = breaks_extended(30)) +
+  scale_x_continuous(limits = c(0,30), breaks = breaks_extended(30))
+
+plotres
+
+```
+
+
+
+# Lab Chlorine 
+lab chlorine binned vs scattered difference  ### to be normalized 
+
+```{r}
+library(scales)
+plot_cl <- ggplot(db3, aes(x = bins, y = labtcl2)) +
+  
+  labs(title = "Lab Chlorine ranges vs difference between Field and Lab", 
+       
+       x = "Lab Chlorine Ranges", y = "Cl2 mg/l") +
+  
+ scale_y_continuous(breaks = breaks_extended(30)) +
+
+ # geom_text(stat = 'count', aes(label=..count..), vjust = -1) +
+
+  geom_boxplot(outlier.shape = NA) + 
+    
+  geom_jitter(mapping = aes(x = bins, y = difference), data = db3, stat = "identity", 
+              
+              position = "jitter", inherit.aes = TRUE, alpha = 0.3, color = "blue") +
+
+  theme_bw() + theme(axis.text.x = element_text(angle = 60, hjust = 1))
+
+plot_cl
+
+
+```
+
+
+
+
+```{r}
+
+#temperature vs difference
+#db1 is being used 
+#  ggplot(db1, aes(x = temperature, y = difference)) + 
+#  geom_point() +
+#  xlim(10,30)
+
+# to check the range of labtcl2
+#tt <- unique(db1$temperature) %>%
+# as_tibble() %>%
+#arrange(desc(value))
+
+#summary(tt)
+
+
+```
+
+
+ 
+
+```{r}
+#temperature vs chlorine + difference
+#db4 <- db3 %>% 
+  
+  
+  
+
+#plot_temp <- ggplot(db4, aes(x = temperature, y = labtcl2)) +
+  
+ # labs(title = "Lab Chlorine ranges vs difference between Field and Lab", 
+       
+  #     x = "temperature", y = "CL2 mg/l") +
+  
+ #scale_y_continuous(breaks = breaks_extended(30)) +
+ # xlim(10,30) +
+
+ # geom_text(stat = 'count', aes(label=..count..), vjust = -1) +
+
+  #geom_boxplot(outlier.shape = NA) 
+    
+ # geom_jitter(mapping = aes(x = bins, y = difference), data = db3, stat = "identity", 
+ #             
+ #             position = "jitter", inherit.aes = TRUE, alpha = 0.3, color = "blue") +
+
+  #theme_bw()
+
+#plot_temp
+
+
+
+
+
+```
+
+
+
+multiple linear regression
+
+```{r}
+
+model <- lm(db1$labtcl2~db1$difference, data = db1)
+print(summary(model))
+
+# r-squared = 
+
+```
+## pearson correlation 
+correlation between lab chlorine and difference 
+```{r}
+library("ggpubr")
+ggscatter(db1, x = "labtcl2", y = "difference",
+          add = "reg.line", conf.int = TRUE,
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "lab chlorine", ylab = "difference")
+```
+
+
+## bias analysis with Bland-Altman plot 
+
+A Bland-Altman plot provides visual insights into the differences and variability between the two methods. Here's how to interpret a Bland-Altman plot:
+
+1. plot elements:
+
+x-axis : The x-axis represents the average or mean of the measurements from the two methods.
+y-axis: The y-axis represents the difference between the measurements from the two methods (Method 1 - Method 2).
+Data points: Each data point on the plot represents an individual measurement.
+
+2. dashed line: is drawn at the mean difference (bias) between the two methods.
+Provides a reference for the overall bias. Ideally, you want this line to be close to zero, indicating minimal bias.
+
+3. Spread of data:
+
+   - The spread or dispersion of data points around the dashed line indicates the agreement between the two methods.
+   - Wider spread suggests greater variability or disagreement between the methods.
+   - The spread of data points is often used to calculate the limits of agreement.
+
+4. Limits of Agreement (LOA):
+
+   - The LOA are typically represented as two parallel blue lines above and below the mean difference line.
+   - These lines are often set at ±1.96 times the standard deviation of the differences.
+   - The LOA represent the range within which approximately 95% of the differences between the methods are expected to fall, assuming a normal distribution.
+   - The narrower the LOA, the better the agreement between the methods.
+
+
+```{r}
+db3$diff <- db3$labtcl2 - db3$fieldtcl2
+db3$mean <- (db3$labtcl2 + db3$fieldtcl2)/2
+
+
+# Calculate the LOA
+loa <- c(mean(db3$diff) - 1.96 * sd(db3$diff), mean(db3$diff) + 1.96 * sd(db3$diff))
+
+# Create the Bland-Altman plot
+p <- ggplot(db3, aes(x = mean, y = diff)) +
+  geom_point() +
+  geom_abline(intercept = mean(db3$diff), slope = 0, color = "red", linetype = "dashed") +
+  geom_hline(yintercept = loa[1], color = "blue", linetype = "dotted") +
+  geom_hline(yintercept = loa[2], color = "blue", linetype = "dotted") +
+  labs(x = "Mean of Two Methods", y = "Difference Between Methods") +
+  ggtitle("Bland-Altman Plot with LOA")
+
+p
+
+
+```
+
+
+## concordance correlation coefficient 
+
+```{r}
+
+l#ibrary(epiR)
+#library(survival)
+
+# Load the epiR package
+#library(epiR)
+
+# Calculate CCC
+#ccc_result <- concordance(db3$fieldtcl2, db3$labtcl2)
+
+# Print the CCC result
+#cat("Concordance Correlation Coefficient (CCC):", ccc_result$rho_c, "\n")
+
+
+
+
+```
+
+
+
+
+analysis by site 
+```{r}
+#  analysis to group by site and different values of chlorine 
+
+
+db5 <- db3 %>%
+  
+  group_by(site) %>%
+
+  mutate(site = as.factor(site))
+
+unique_sites <- unique(db3$site)
+
+sites_groups <- cut(seq_along(unique_sites), breaks = 2, labels = c("Group 1", "Group 2"))
+
+
+site_group_mapping <- setNames(sites_groups, unique_sites)
+
+# Add a new column to your dataset indicating which group each site belongs to
+db3$site_group <- site_group_mapping[db3$site]
+
+
+# Your previous plot code with 'site_group' added to facet_wrap
+
+
+  
+  plot_site <- ggplot(db5, aes(x = site, y = difference)) +
+    
+    geom_boxplot(outlier.shape = NA) + 
+  
+  labs(title = "site vs difference", x = "sites", y = "Cl2 mg/l difference") 
+  
+ #scale_y_continuous(breaks = breaks_extended(30)) +
+
+ # geom_text(stat = 'count', aes(label=..count..), vjust = -1) +
+    
+  #geom_jitter(mapping = aes(x = bins, y = difference), data = db3, stat = "identity", 
+              
+    #          position = "jitter", inherit.aes = TRUE, alpha = 0.3, color = "blue") +
+#
+ #theme_bw() + theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+     # facet_wrap(~cut(site, n = 2, labels = c("First Half", "Second Half")))
+
+plot_site
+  
+  
+  
+```
+
+
+
+## split sites in two groups to have a clearer view 
+
+
+
+
+
+
+
+
+
+```{r}
+library(ggplot2)
+
+
+# Assuming 'sites' is the column containing non-numeric site names
+
+# Determine the number of unique sites
+unique_sites <- unique(db3$site)
+
+# Split the unique sites into two groups
+sites_groups <- cut(seq_along(unique_sites), breaks = 2, labels = c("Group 1", "Group 2"))
+
+# Create a named vector mapping each site to its corresponding group
+site_group_mapping <- setNames(sites_groups, unique_sites)
+
+
+
+
+db5 <- db3 %>%
+  
+  group_by(site) %>%
+ # summarise(result = mean(difference), .groups = "keep") %>%
+ # mutate(site = as.factor(site)) %>%
+ cut(seq_along(unique(as.numeric(site))), breaks = 2, labels = c("Group 1", "Group 2"))
+  
+
+
+
+# Add a new column to your dataset indicating which group each site belongs to
+db3$site_group <- site_group_mapping[db3$site]
+
+ plot_site <- ggplot(db5, aes(x = site, y = difference)) +
+    
+    geom_boxplot(outlier.shape = NA) + 
+  
+  labs(title = "site vs difference", x = "sites", y = "Cl2 mg/l difference") 5
+
+```
+
+
+
+
+
+
+## analysis for instrument and time fidderence between collection and analysis time 
+
+
+
+```{r}
+
+library(magrittr)
+library(wqr)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(fuzzyjoin)
+
+
+start <-'2022-10-19'
+
+end <- '2023-10-19'
+
+param<- c("Field-Chlorine Residual Total", "Chlorine Residual Total")
+
+sites2 <- c(1101, 1102, 1103, 1107, 1300, 1301, 1302, 1303, 1401, 1601, 1602, 1603, 
+            1608, 1701, 1702, 1708, 1710, 1713, 1716, 1718, 1719, 1721, 2401, 2403,
+            2501, 2502, 2600, 2601, 2602, 2603, 2706, 2712, 2713, 3800, 3801, 3803, 
+            3901, 3904, 3906, 3907, 3913, 4001, 4005, 7101, 7204, 7207, 7301, 7302, 
+            7401, 7502, 7601)
+
+
+
+dbtr <- read_LIMS(site = NULL, 
+                
+                parameter = param, 
+                
+                start_date = start, end_date = end, 
+                
+                sample_class = "Routine Daily",
+                
+                select_additional = c("date_time_analyzed" = "ANALYZED_ON", "ANALYZED_BY")) %>%
+  
+  filter(!is.na(result)) %>%
+  
+  separate('date_time', into = c("date", "time"), sep = ' ') %>%
+  separate('date_time_analyzed', into = c("date_an", "time_an"), sep = ' ') %>%
+  
+  group_by(lims_number, site, date) %>%
+  
+  arrange(lims_number)
+
+
+#read_LIMS(parameter = "Chlorine Residual Total", select_additional = c("date_time_analyzed" = "ANALYZED_ON", "ANALYZED_BY"))
+
+
+
+```
+
+
+
+
+```{r}
+dbtr1 <- pivot_wider(dbtr, id_cols = c("site", "lims_number", "date", "time" ,"temperature", "units",
+                                       "ANALYZED_BY", "date_an", "time_an"),
+                   
+                   values_from = result, 
+                   
+                   names_from = parameter) %>%
+ 
+  # filter(!is.na(`Field-Chlorine Residual Total`) & !is.na(`Chlorine Residual Total`)) %>%
+  
+  
+   mutate(
+     
+     "fieldtcl2" = `Field-Chlorine Residual Total`, 
+     
+     "labtcl2" = `Chlorine Residual Total`,
+     
+     "difference" = (labtcl2 - fieldtcl2),
+ 
+     "percentdiff" = ((fieldtcl2 - labtcl2)/labtcl2)*100 ) %>% 
+  
+select( -c(`Field-Chlorine Residual Total`, `Chlorine Residual Total`))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
