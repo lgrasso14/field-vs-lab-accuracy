@@ -99,9 +99,9 @@ db1 <- pivot_wider(db, id_cols = c("site", "lims_number", "date", "temperature",
   
    mutate(
      
-     "fieldtcl2" = `Field-Chlorine Residual Total`, 
+     fieldtcl2 = `Field-Chlorine Residual Total`, 
      
-     "labtcl2" = `Chlorine Residual Total`,
+     labtcl2 = `Chlorine Residual Total`,
      
      "difference" = (labtcl2 - fieldtcl2),
  
@@ -133,7 +133,7 @@ mutate(bins= cut(difference,
 # proportion difference neg/pos 
 
 a negative difference means that field chlorine > lab chlorine (this is what we would expect since for the time gap between collection and lab analysis)
-a positive difference means that lab chlorine > field chlorine 
+a positive difference means that lab chlorine > field chlorine
 
 
 
@@ -151,7 +151,7 @@ counts
 posn <- pos/tot
 negn <-  neg/tot
 equaln <- equal/tot
-countsn <- as.data.frame(rbind("pos" = posn,"neg" = negn, "equal" = equaln, tot))
+countsn <- as.data.frame(cbind("pos" = posn,"neg" = negn, "equal" = equaln, tot))
 
 df <- rbind("counts" = counts, "norm" = countsn)
 
@@ -183,17 +183,11 @@ graph
 geom bar comparing counts of chlorine samples vs difference between lab and field. 
 
 ```{r}
-total_count <- length(db1$lims_number)  #normalization for the next step
- 
-db1s <- db1 %>%
-  group_by(bins) %>%
-  mutate(frequency = n()) %>%
-  ungroup() %>%
-  mutate("norm" = (normalized_frequency = frequency / total_count))
 
-plot <- ggplot(db1s, aes(x= bins)) + 
+
+plot <- ggplot(db1, aes(x= bins)) + 
   
-  geom_bar(aes(y= after_stat(count))) + scale_y_continuous(limits=c(0,5000)) +
+  geom_bar(aes(y= after_stat(count))) + scale_y_continuous(limits=c(0,3000)) +
   
   geom_text(stat = 'count', aes(label = after_stat(count)), vjust = -1) +
 
@@ -209,18 +203,7 @@ plot <- ggplot(db1s, aes(x= bins)) +
  plot2
  
  
- # freq <- db1 %>% group_by(bins) %>% count((bins))   ## normalization 
- 
- density_plot <- ggplot(db1s, aes(x = bins)) +
-  geom_density(fill = "lightblue", alpha = 0.5) +
-  xlab("difference lab vs field") +
-  ylab("Density")
 
- 
- density_plot
-# Combine the two plots
-
- 
 
 ```
 ## normalized geom bar 
@@ -229,13 +212,24 @@ same analysis but normalized
 
 ```{r}
 
-plot <-
+
+
+total_count <- length(db1$lims_number)  #normalization for the next step
+ 
+db1s <- db1 %>%
+  group_by(bins) %>%
+  # mutate(frequency = n()) %>%
+  # ungroup() %>%
+  summarize(norm = n() / total_count)
+
+
+plot_n <-
   
   ggplot(db1s, aes(x= bins, y = norm)) + 
   
   geom_bar(stat = 'identity') +
   
-  scale_y_continuous(aes(label=scales::percent(norm), vjust = -1)) + 
+  scale_y_continuous(label=scales::percent) + 
   
   xlab("difference lab vs field") + ylab("normalized percent") +
 
@@ -243,15 +237,28 @@ plot <-
   geom_text(aes(label=scales::percent(norm), vjust = -1, angle = 25)) 
   
   
- plot2 <- plot +  labs(title = "Values Difference Field vs Lab Chlorine") +
+ plot2n <- plot_n +  labs(title = "Values Difference Field vs Lab Chlorine") +
    
    theme(axis.text.x = element_text(angle = 60, hjust = 1))
  
 
 
- plot2
+ plot2n
  
+ # freq <- db1 %>% group_by(bins) %>% count((bins))   ## to review
+ 
+ density_plot <- ggplot(db1, aes(y = bins, x = temperature)) +
+  ggridges::geom_density_ridges() +
+   scale_x_continuous(limits = c(0, 35)) +
+  # geom_density(fill = "lightblue", alpha = 0.5) +
+  xlab("difference lab vs field") +
+  ylab("Density")
 
+ 
+ density_plot
+# Combine the two plots
+
+ 
 
 
 ```
@@ -314,7 +321,9 @@ mutate(bins= cut(labtcl2,
 
 ```{r}
 library(ggplot2)
-library(ggplot2)
+# library(epiR)
+library(survival)
+library(scales)
 
 plotres <- ggplot(db3, aes(x = temperature, y = difference)) +
   geom_point() +  # Add points for the scatterplot
@@ -323,6 +332,17 @@ plotres <- ggplot(db3, aes(x = temperature, y = difference)) +
   scale_x_continuous(limits = c(0,30), breaks = breaks_extended(30))
 
 plotres
+# db4 <- db3%>% group_by(temperature)
+
+plot_temp <- db3 %>% 
+  mutate(
+    temperature = factor(as.character(round(temperature)), levels = 1:35)
+  ) %>%
+  ggplot(aes(x = temperature, y = difference)) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_y_continuous(limits = c(-0.6, 1.0), breaks = breaks_extended(30))
+  # scale_x_continuous(limits = c(0,30), breaks = breaks_extended(30))
+plot_temp
 
 ```
 
@@ -420,12 +440,24 @@ multiple linear regression
 
 ```{r}
 
-model <- lm(db1$labtcl2~db1$difference, data = db1)
+model <- lm(db1$difference~db1$labtcl2, data = db1)
 print(summary(model))
 
 # r-squared = 
 
 ```
+```{r}
+model1 <- lm(db1$difference~db1$temperature, data = db1)
+print(summary(model1))
+```
+
+```{r}
+model2 <- lm(db1$temperature~db1$labtcl2, data = db1)
+print(summary(model2))
+```
+
+
+
 ## pearson correlation 
 correlation between lab chlorine and difference 
 ```{r}
@@ -512,15 +544,17 @@ l#ibrary(epiR)
 
 
 analysis by site 
-```{r}
+```{r, fig.width = 10, fig.height = 7}
 #  analysis to group by site and different values of chlorine 
-
+site_info <- wqr::get_site_info() %>% 
+  select(loc_id, service_area)
 
 db5 <- db3 %>%
+  left_join(site_info, by = c("site" = "loc_id")) %>% 
   
-  group_by(site) %>%
+  # group_by(site) %>%
 
-  mutate(site = as.factor(site))
+  mutate(site = as.character(site))
 
 unique_sites <- unique(db3$site)
 
@@ -540,6 +574,7 @@ db3$site_group <- site_group_mapping[db3$site]
   plot_site <- ggplot(db5, aes(x = site, y = difference)) +
     
     geom_boxplot(outlier.shape = NA) + 
+    facet_wrap(vars(service_area), drop = TRUE, scales = "free_x", ncol = 2) +
   
   labs(title = "site vs difference", x = "sites", y = "Cl2 mg/l difference") 
   
@@ -573,41 +608,41 @@ plot_site
 
 
 ```{r}
-library(ggplot2)
+
 
 
 # Assuming 'sites' is the column containing non-numeric site names
 
 # Determine the number of unique sites
-unique_sites <- unique(db3$site)
+#unique_sites <- unique(db3$site)
 
 # Split the unique sites into two groups
-sites_groups <- cut(seq_along(unique_sites), breaks = 2, labels = c("Group 1", "Group 2"))
+#sites_groups <- cut(seq_along(unique_sites), breaks = 2, labels = c("Group 1", "Group 2"))
 
 # Create a named vector mapping each site to its corresponding group
-site_group_mapping <- setNames(sites_groups, unique_sites)
+#site_group_mapping <- setNames(sites_groups, unique_sites)
 
 
 
 
-db5 <- db3 %>%
+#db5 <- db3 %>%
   
-  group_by(site) %>%
+ # group_by(site) %>%
  # summarise(result = mean(difference), .groups = "keep") %>%
  # mutate(site = as.factor(site)) %>%
- cut(seq_along(unique(as.numeric(site))), breaks = 2, labels = c("Group 1", "Group 2"))
+ #cut(seq_along(unique(as.numeric(site))), breaks = 2, labels = c("Group 1", "Group 2"))
   
 
 
 
 # Add a new column to your dataset indicating which group each site belongs to
-db3$site_group <- site_group_mapping[db3$site]
+#db3$site_group <- site_group_mapping[db3$site]
 
- plot_site <- ggplot(db5, aes(x = site, y = difference)) +
+# plot_site <- ggplot(db5, aes(x = site, y = difference)) +
     
-    geom_boxplot(outlier.shape = NA) + 
+ #   geom_boxplot(outlier.shape = NA) + 
   
-  labs(title = "site vs difference", x = "sites", y = "Cl2 mg/l difference") 5
+ # labs(title = "site vs difference", x = "sites", y = "Cl2 mg/l difference") 5
 
 ```
 
@@ -621,14 +656,6 @@ db3$site_group <- site_group_mapping[db3$site]
 
 
 ```{r}
-
-library(magrittr)
-library(wqr)
-library(dplyr)
-library(tidyverse)
-library(ggplot2)
-library(fuzzyjoin)
-
 
 start <-'2022-10-19'
 
@@ -657,9 +684,10 @@ dbtr <- read_LIMS(site = NULL,
   filter(!is.na(result)) %>%
   
   separate('date_time', into = c("date", "time"), sep = ' ') %>%
+  
   separate('date_time_analyzed', into = c("date_an", "time_an"), sep = ' ') %>%
   
-  group_by(lims_number, site, date) %>%
+  # group_by(lims_number, site, date) %>%
   
   arrange(lims_number)
 
@@ -674,6 +702,16 @@ dbtr <- read_LIMS(site = NULL,
 
 
 ```{r}
+
+analysts <- dbtr %>% 
+  select(lims_number, parameter, ANALYZED_BY) %>% 
+  
+  pivot_wider(names_from = parameter, values_from = ANALYZED_BY) %>% 
+  
+  rename(lab_analyst = `Chlorine Residual Total`, field_analyst =
+           
+           `Field-Chlorine Residual Total`)
+
 dbtr1 <- pivot_wider(dbtr, id_cols = c("site", "lims_number", "date", "time" ,"temperature", "units",
                                        "ANALYZED_BY", "date_an", "time_an"),
                    
@@ -682,7 +720,7 @@ dbtr1 <- pivot_wider(dbtr, id_cols = c("site", "lims_number", "date", "time" ,"t
                    names_from = parameter) %>%
  
   # filter(!is.na(`Field-Chlorine Residual Total`) & !is.na(`Chlorine Residual Total`)) %>%
-  
+  left_join(analysts, by = "lims_number") %>% 
   
    mutate(
      
@@ -695,6 +733,9 @@ dbtr1 <- pivot_wider(dbtr, id_cols = c("site", "lims_number", "date", "time" ,"t
      "percentdiff" = ((fieldtcl2 - labtcl2)/labtcl2)*100 ) %>% 
   
 select( -c(`Field-Chlorine Residual Total`, `Chlorine Residual Total`))
+
+
+
 ```
 
 
